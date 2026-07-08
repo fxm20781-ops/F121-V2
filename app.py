@@ -17,63 +17,94 @@ def train_models_with_real_data():
     
     df = None
     
+    # 智慧嘗試各種讀取方式
     if os.path.exists(excel_file):
         try:
-            xl = pd.ExcelFile(excel_file)
-            sheet_idx = 1 if len(xl.sheet_names) > 1 else 0
-            df = pd.read_excel(excel_file, sheet_name=sheet_idx, skiprows=[1])
+            df = pd.read_excel(excel_file)
         except Exception:
             pass
             
     if df is None and os.path.exists(csv_file):
         try:
-            df = pd.read_excel(csv_file, sheet_name=1, skiprows=[1])
+            df = pd.read_excel(csv_file)
         except Exception:
             try:
-                df = pd.read_excel(csv_file, sheet_name=0, skiprows=[1])
+                df = pd.read_csv(csv_file, encoding='utf-8')
             except Exception:
-                try:
-                    df = pd.read_csv(csv_file, skiprows=[1], encoding='utf-8')
-                except Exception:
-                    df = pd.read_csv(csv_file, skiprows=[1], encoding='big5')
+                df = pd.read_csv(csv_file, encoding='big5')
 
     if df is None:
-        st.error("❌ 找不到有效的資料檔，請確認 F121_Data.xlsx 有上傳到 GitHub。")
+        st.error("❌ 找不到任何數據檔案！請確認 GitHub 上是否有上傳 F121_Data.xlsx 檔案。")
         st.stop()
         
-    # 清理欄位名稱（移除換行、將多個空格壓扁成單一空格）
-    df.columns = df.columns.astype(str).str.replace('\n', ' ').str.replace('\r', ' ')
-    df.columns = df.columns.str.replace(r'\s+', ' ', regex=True).str.strip()
+    # --- 欄位名稱極致清洗 ---
+    # 先把可能是不小心讀到的 Tag 行（第二行文字）過濾，如果第一行或第二行是文字，我們後面用 pd.to_numeric 排除
+    raw_columns = df.columns.astype(str).tolist()
     
-    # 【超級核心修正】完全模糊比對欄位，不再死綁固定字串
-    def find_col(keywords, default_name):
+    # 清洗：移除換行、將多個空格壓扁成單一空格、全部變小寫以便比對
+    cleaned_cols = []
+    for col in df.columns:
+        c_str = str(col).replace('\n', ' ').replace('\r', ' ')
+        c_str = ' '.join(c_str.split()).strip()
+        cleaned_cols.append(c_str)
+    df.columns = cleaned_cols
+
+    # 模糊搜尋定位函式
+    def find_col(keywords):
         for col in df.columns:
             if any(k in col.lower() for k in keywords):
                 return col
-        return default_name
+        return None
 
-    dt_col = find_col(['dt', 'operation'], 'DT operation')
-    c141_col = find_col(['c141', 'operation'], 'C141 operation')
-    clo_col = find_col(['clo', 'circulation', 'flow'], 'F121 CLO circulation flow')
-    temp_col = find_col(['f121outlet', 'temperature'], 'F121outlet temperature')
-    oxy_col = find_col(['oxygen'], 'F121 Oxygen content %')
-    ng_col = find_col(['ng', 'consumption'], 'F121 NG consumption')
-    c122_col = find_col(['c122', 'bottom'], 'C122 bottom temperature')
+    dt_col = find_col(['dt', 'operation'])
+    c141_col = find_col(['c141', 'operation'])
+    clo_col = find_col(['clo', 'circulation', 'flow'])
+    temp_col = find_col(['f121outlet', 'temperature', 'outlet'])
+    oxy_col = find_col(['oxygen', 'content', 'content %'])
+    ng_col = find_col(['ng', 'consumption'])
+    c122_col = find_col(['c122', 'bottom'])
+
+    # 診斷專區：如果有任何一個欄位失蹤，直接回報給使用者看
+    missing = []
+    pairs = [
+        ('DT operation (稼動率)', dt_col, ['dt', 'operation']),
+        ('C141 operation (稼動率)', c141_col, ['c141', 'operation']),
+        ('F121 CLO circulation flow (流量)', clo_col, ['clo', 'circulation', 'flow']),
+        ('F121outlet temperature (出口溫度)', temp_col, ['f121outlet', 'temperature', 'outlet']),
+        ('F121 Oxygen content % (含氧量)', oxy_col, ['oxygen', 'content']),
+        ('F121 NG consumption (天然氣能耗)', ng_col, ['ng', 'consumption']),
+        ('C122 bottom temperature (C122塔底溫度)', c122_col, ['c122', 'bottom'])
+    ]
+    
+    for label, found_name, keys in pairs:
+        if found_name is None:
+            missing.append(f"【{label}】(尋找關鍵字: {keys})")
+            
+    if missing:
+        st.error("❌ 欄位自動對齊失敗！AI 找不到對應的製程參數欄位。")
+        st.warning("⚠️ 沒對齊到的欄位有：")
+        for m in missing:
+            st.write(m)
+        st.markdown("---")
+        st.info("📊 以下是目前從你的 Excel 檔案中讀取到的『所有欄位名稱』，請對照看看字體或拼音有沒有漏掉：")
+        st.write(list(raw_columns))
+        st.stop()
 
     X_cols = [dt_col, c141_col, clo_col, temp_col, oxy_col]
     all_cols = X_cols + [ng_col, c122_col]
     
+    # 強制將數據轉換為數字，自動忽略 TR122-11 等非數字的文字行
     df_clean = df[all_cols].apply(pd.to_numeric, errors='coerce').dropna()
     
     if len(df_clean) == 0:
-        st.error("❌ 數據解析後為空，請確認檔案內包含真實數據。")
+        st.error("❌ 找到欄位了，但數據轉換為數字後變為空值！請確認 Excel 欄位底下的格子是不是都是空白或文字。")
         st.stop()
 
     X = df_clean[X_cols]
     y_ng = df_clean[ng_col]
     y_c122 = df_clean[c122_col]
     
-    # 使用動態比對到的欄位名稱來建立邊界
+    # 動態邊界範圍
     bounds_dict = {
         'dt': (float(X[dt_col].min()), float(X[dt_col].max())),
         'c141': (float(X[c141_col].min()), float(X[c141_col].max())),
@@ -88,11 +119,10 @@ def train_models_with_real_data():
     model_c122 = LGBMRegressor(random_state=42)
     model_c122.fit(X, y_c122)
     
-    # 把動態確定的欄位名稱也回傳，供介面顯示
     col_names = {'dt': dt_col, 'c141': c141_col, 'clo': clo_col, 'temp': temp_col, 'oxy': oxy_col}
     return model_ng, model_c122, bounds_dict, col_names
 
-with st.spinner("🚀 正在智慧辨識欄位並訓練 AI 模型..."):
+with st.spinner("🚀 正在執行智慧特徵比對並訓練 AI 模型..."):
     model_ng, model_c122, bounds, names = train_models_with_real_data()
 
 # --- 3. 側邊欄：不可控變數輸入 ---
@@ -115,7 +145,7 @@ best_flow, best_temp, best_oxy = res.x[0], res.x[1], res.x[2]
 best_features = np.array([[input_dt, input_c141, best_flow, best_temp, best_oxy]])
 predicted_c122_temp = model_c122.predict(best_features)[0]
 
-# --- 6. 主要內容區：顯示最佳化與預測結果 ---
+# --- 6. 主要內容區 ---
 col1, col2 = st.columns(2)
 
 with col1:
@@ -129,7 +159,7 @@ with col2:
     st.info(f"✨ 在目前的排程下，預估最低天然氣消耗量 Y 為： **{res.fun:.2f}**")
     st.success(f"🌡️ 此最佳操作狀態下，預估的 **C122 bottom temperature** 為： **{predicted_c122_temp:.2f} °C**")
 
-# --- 7. 互動式測試：手動微調 ---
+# --- 7. 互動式測試 ---
 st.markdown("---")
 st.subheader("🎮 手動操作與即時溫度/能耗連動模擬器")
 
@@ -144,4 +174,3 @@ manual_c122 = model_c122.predict(manual_features)[0]
 res_col1, res_col2 = st.columns(2)
 res_col1.metric(label="🏃 手動設定下的預估天然氣消耗 (Y)", value=f"{manual_y:.2f}")
 res_col2.metric(label="🌡️ 手動設定下的預估 C122 塔底溫度", value=f"{manual_c122:.2f} °C")
-

@@ -9,39 +9,44 @@ import os
 st.set_page_config(page_title="F121 節能與製程預測系統", layout="wide")
 st.title("🔥 F121 天然氣最佳化操作與 C122 溫度預測系統")
 
-# --- 2. 讀取 Excel 真實資料與訓練雙模型 ---
+# --- 2. 智慧讀取資料與訓練模型 ---
 @st.cache_resource
 def train_models_with_real_data():
-    excel_filename = "F121_Data.xlsx" # 👈 請確保 GitHub 上的 Excel 檔名叫這個
-    
-    if not os.path.exists(excel_filename):
-        st.error(f"❌ 找不到資料檔 {excel_filename}，請確認是否有上傳到 GitHub。")
-        st.stop()
-        
-    # 自動撈出 Excel 裡面的所有分頁名稱
-    xl = pd.ExcelFile(excel_filename)
-    sheet_names = xl.sheet_names
+    # 智慧偵測：不管你上傳的是 .xlsx 還是 .csv，只要有名稱就通殺
+    excel_file = "F121_Data.xlsx"
+    csv_file = "F121_Data.csv"
     
     df = None
-    # 遍歷所有分頁，找出哪一張才是真正的「每日原始數據流水帳」
-    for sheet in sheet_names:
-        temp_df = pd.read_excel(excel_filename, sheet_name=sheet)
-        # 清理該分頁的欄位名稱
-        temp_df.columns = temp_df.columns.astype(str).str.replace('\n', ' ').str.replace('\r', ' ')
-        temp_df.columns = temp_df.columns.str.replace(r'\s+', ' ', regex=True).str.strip()
-        
-        # 如果欄位名稱裡同時包含 "dt" 和 "c141"，而且不包含 "25th" (排除統計表)，這就是我們要的原始資料分頁！
-        cols_str = "".join(temp_df.columns).lower()
-        if 'dt' in cols_str and 'c141' in cols_str and '25th' not in cols_str:
-            # 重新讀取，並跳過第 1 行的 Tag 代號 (TR122-11 等)
-            df = pd.read_excel(excel_filename, sheet_name=sheet, skiprows=[1])
-            break
-            
-    if df is None:
-        # 如果上面沒找到，就強制拿第一個分頁
-        df = pd.read_excel(excel_filename, sheet_name=sheet_names[0], skiprows=[1])
     
-    # 再次徹底清理欄位名稱
+    # 優先嘗試讀取真正的 Excel 檔案
+    if os.path.exists(excel_file):
+        try:
+            xl = pd.ExcelFile(excel_file)
+            # 如果有多個分頁，自動找含有真實數據的第二個分頁(index=1)，找不到就拿第一個
+            sheet_idx = 1 if len(xl.sheet_names) > 1 else 0
+            df = pd.read_excel(excel_file, sheet_name=sheet_idx, skiprows=[1])
+        except Exception:
+            pass
+            
+    # 如果 Excel 讀不到，嘗試讀取 CSV 檔案
+    if df is None and os.path.exists(csv_file):
+        try:
+            # 這裡用 openpyxl 強制嘗試，因為你的 CSV 本質可能是 Excel
+            df = pd.read_excel(csv_file, sheet_name=1, skiprows=[1])
+        except Exception:
+            try:
+                df = pd.read_excel(csv_file, sheet_name=0, skiprows=[1])
+            except Exception:
+                try:
+                    df = pd.read_csv(csv_file, skiprows=[1], encoding='utf-8')
+                except Exception:
+                    df = pd.read_csv(csv_file, skiprows=[1], encoding='big5')
+
+    if df is None:
+        st.error("❌ 找不到有效的資料檔（F121_Data.xlsx 或 F121_Data.csv），請確認檔案已正確上傳至 GitHub。")
+        st.stop()
+        
+    # 【超級清洗】移除欄位名稱中所有的換行、特殊空白、多餘空格
     df.columns = df.columns.astype(str).str.replace('\n', ' ').str.replace('\r', ' ')
     df.columns = df.columns.str.replace(r'\s+', ' ', regex=True).str.strip()
     
@@ -67,7 +72,7 @@ def train_models_with_real_data():
     df_clean = df[all_cols].apply(pd.to_numeric, errors='coerce').dropna()
     
     if len(df_clean) == 0:
-        st.error("❌ 找不到原始數據！請確認您的 Excel 檔中是否包含完整的『每日歷史數據流水帳』分頁（即包含 2025-01-01 等日期的那張表）。")
+        st.error("❌ 找不到流水帳原始數據！請確認您的 Excel 檔中是否包含完整的『每日歷史數據流水帳』。")
         st.stop()
 
     X = df_clean[X_cols]
@@ -92,7 +97,7 @@ def train_models_with_real_data():
     
     return model_ng, model_c122, bounds_dict
 
-with st.spinner("🚀 正在自動搜尋原始數據分頁並訓練 AI 模型..."):
+with st.spinner("🚀 正在自動智慧辨識檔案格式並訓練 AI 模型..."):
     model_ng, model_c122, bounds = train_models_with_real_data()
 
 # --- 3. 側邊欄：不可控變數輸入 ---
@@ -144,4 +149,3 @@ manual_c122 = model_c122.predict(manual_features)[0]
 res_col1, res_col2 = st.columns(2)
 res_col1.metric(label="🏃 手動設定下的預估天然氣消耗 (Y)", value=f"{manual_y:.2f}")
 res_col2.metric(label="🌡️ 手動設定下的預估 C122 塔底溫度", value=f"{manual_c122:.2f} °C")
-

@@ -12,7 +12,7 @@ st.title("🔥 F121 天然氣最佳化操作與 C122 溫度預測系統")
 # --- 2. 讀取真實資料與訓練雙模型 ---
 @st.cache_resource
 def train_models_with_real_data():
-    csv_filename = "F121_Data.csv"
+    csv_filename = "Data.csv"
     
     if not os.path.exists(csv_filename):
         st.error(f"❌ 找不到資料檔 {csv_filename}，請確認是否有上傳到 GitHub。")
